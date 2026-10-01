@@ -48,5 +48,3 @@ src/vendor/                   # audited ETHTornado stack
 src/interfaces/               # InstanceRegistry ABI
 test/AddEthPoolsProposal.t.sol
 ```
-
-Proposal wiring follows the same `executeProposal()` pattern as [tornado-governance-lock](https://github.com/pcaversaccio/tornado-governance-lock).
