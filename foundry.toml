@@ -7,19 +7,42 @@ libs = ["lib"]
 cache = true
 cache_path = "cache"
 force = false
-# Per-file pragma selects solc (0.7.6 for proposal/vendor, 0.8.x for tests).
+# Per-file pragma + compilation_restrictions select solc (0.5.11 classic, 0.8.x tests).
+auto_detect_solc = true
+# Default EVM for forge-std tests (needs chainid / Istanbul+).
 evm_version = "paris"
 optimizer = true
-optimizer_runs = 999_999
+optimizer_runs = 200
 via_ir = false
 verbosity = 3
 isolate = true
 lint = { lint_on_build = false }
+# Link Hasher library like the live 1/10/100 ETH pools.
+libraries = [
+  "src/classic/TornadoCash_eth.sol:Hasher:0x83584f83f26aF4eDDA9CBe8C730bc87C364b28fe",
+]
+
+# Classic pools: match mainnet TornadoCash_eth (petersburg + solc 0.5.11).
+[[profile.default.additional_compiler_profiles]]
+name = "classic"
+evm_version = "petersburg"
+optimizer = true
+optimizer_runs = 200
+
+[[profile.default.compilation_restrictions]]
+paths = "src/**/*.sol"
+version = "=0.5.11"
+evm_version = "petersburg"
+optimizer_runs = 200
 
 # Default overrides for the CI runs.
 [profile.ci]
 force = true
 verbosity = 4
+
+# Keep verified classic mixer source byte-identical to Sourcify.
+[fmt]
+ignore = ["src/classic/*.sol"]
 
 [rpc_endpoints]
 mainnet = "${ETH_RPC_URL}"

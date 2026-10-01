@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.7.6;
-pragma abicoder v2;
+pragma solidity ^0.5.8;
+pragma experimental ABIEncoderV2;
 
 interface IERC20Minimal {
     function balanceOf(address account) external view returns (uint256);

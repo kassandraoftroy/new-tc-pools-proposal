@@ -25,6 +25,9 @@ interface IGovernance {
 interface ITornadoInstance {
     function denomination() external view returns (uint256);
     function commitments(bytes32) external view returns (bool);
+    function verifier() external view returns (address);
+    function levels() external view returns (uint32);
+    function operator() external view returns (address);
 }
 
 interface IInstanceRegistry {
@@ -55,12 +58,20 @@ interface ITornadoRouter {
  * @dev Mainnet-fork E2E: spoof a large TORN holder, run propose → vote → execute
  *      with time warps matching live governance delays, then deposit via TornadoRouter
  *      into each newly registered ETH pool.
+ *
+ * @dev Bytecode gate (test-only): `extcodehash` = keccak256(runtime). Runtime =
+ *      [EVM body || solc CBOR metadata || uint16 metaLen]. We strip the metadata
+ *      trailer and require the EVM body to equal the live 1 ETH pool byte-for-byte.
+ *      Full extcodehash still differs (native solc 22be8592 vs emscripten c082d0b4).
  */
 contract AddEthPoolsProposalTest is Test {
     address private constant _TORN = 0x77777FeDdddFfC19Ff86DB637967013e6C6A116C;
     address private constant _GOVERNANCE = 0x5efda50f22d34F262c29268506C5Fa42cB56A1Ce;
     address private constant _INSTANCE_REGISTRY = 0xB20c66C4DE72433F3cE747b58B86830c459CA911;
     address private constant _ROUTER = 0xd90e2f925DA726b50C4Ed8D0Fb90Ad053324F31b;
+    address private constant _VERIFIER = 0xce172ce1F20EC0B3728c9965470eaf994A03557A;
+    // Live 1 ETH pool — shared TornadoCash_eth runtime with 10/100 ETH.
+    address private constant _LIVE_1_ETH = 0x47CE0C6eD5B0Ce3d3A51fdb1C52DC66a7c3c2936;
 
     // Governance ProposalState enum (live contract).
     uint8 private constant _STATE_AWAITING_EXECUTION = 4;
@@ -79,10 +90,15 @@ contract AddEthPoolsProposalTest is Test {
 
     uint256 private _forkId;
     address private _proposal;
+    /// @dev Metadata-stripped runtime of live 1 ETH (the EVM body inside extcodehash).
+    bytes private _live1EthEvmBody;
 
     function setUp() external {
         string memory rpc = vm.envOr("ETH_RPC_URL", string("https://ethereum-rpc.publicnode.com"));
         _forkId = vm.createSelectFork(rpc);
+        assertTrue(_LIVE_1_ETH.code.length > 0, "live 1 ETH code empty");
+        _live1EthEvmBody = _evmBodyOfExtcode(_LIVE_1_ETH);
+        assertTrue(_live1EthEvmBody.length > 0, "live 1 ETH EVM body empty");
         _proposal = deployCode("AddEthPoolsProposal.sol:AddEthPoolsProposal");
     }
 
@@ -104,9 +120,7 @@ contract AddEthPoolsProposalTest is Test {
         assertEq(_gov.lockedBalance(voter), lockAmount);
 
         // --- Propose ---
-        uint256 proposalId = _gov.propose(
-            _proposal, "Add 0.01, 0.03, 0.3, 3, and 30 ETH Tornado Cash anonymity pools"
-        );
+        uint256 proposalId = _gov.propose(_proposal, "Add 0.01, 0.03, 0.3, 3, and 30 ETH Tornado Cash anonymity pools");
 
         // --- Fast-forward past voting delay, cast FOR vote ---
         vm.warp(block.timestamp + _gov.VOTING_DELAY() + 1);
@@ -136,6 +150,16 @@ contract AddEthPoolsProposalTest is Test {
         _assertEthPool(pool3, _DENOM_3);
         _assertEthPool(pool30, _DENOM_30);
 
+        // Bytecode match vs live 1 ETH (see assertEq in _assertExtcodeEvmBodyMatchesLive1Eth).
+        // We strip the solc CBOR metadata trailer first: full extcodehash differs slightly
+        // because Foundry's native 0.5.11 metadata != historical emscripten c082d0b4 metadata,
+        // while the EVM body is identical.
+        _assertExtcodeEvmBodyMatchesLive1Eth(pool001);
+        _assertExtcodeEvmBodyMatchesLive1Eth(pool003);
+        _assertExtcodeEvmBodyMatchesLive1Eth(pool03);
+        _assertExtcodeEvmBodyMatchesLive1Eth(pool3);
+        _assertExtcodeEvmBodyMatchesLive1Eth(pool30);
+
         // --- Router deposits into every new instance ---
         address depositor = makeAddr("depositor");
         _depositViaRouter(depositor, pool001, _DENOM_001, "c-0.01");
@@ -149,9 +173,7 @@ contract AddEthPoolsProposalTest is Test {
     uint256 private constant _FIELD_SIZE =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
-    function _depositViaRouter(address depositor, address pool, uint256 denomination, string memory tag)
-        internal
-    {
+    function _depositViaRouter(address depositor, address pool, uint256 denomination, string memory tag) internal {
         bytes32 commitment = bytes32(uint256(keccak256(bytes(tag))) % _FIELD_SIZE);
         deal(depositor, denomination);
 
@@ -165,18 +187,67 @@ contract AddEthPoolsProposalTest is Test {
 
     function _assertEthPool(address pool, uint256 denomination) internal view {
         assertEq(ITornadoInstance(pool).denomination(), denomination);
-        (
-            bool isERC20,
-            address token,
-            IInstanceRegistry.InstanceState state,
-            uint24 uniswapFee,
-            uint32 protocolFee
-        ) = _registry.instances(pool);
+        assertEq(ITornadoInstance(pool).verifier(), _VERIFIER, "verifier");
+        assertEq(ITornadoInstance(pool).levels(), uint32(20), "levels");
+        assertEq(ITornadoInstance(pool).operator(), address(0), "operator");
+
+        (bool isERC20, address token, IInstanceRegistry.InstanceState state, uint24 uniswapFee, uint32 protocolFee) =
+            _registry.instances(pool);
         assertFalse(isERC20);
         assertEq(token, address(0));
         assertTrue(state == IInstanceRegistry.InstanceState.ENABLED);
         assertEq(uniswapFee, uint24(0));
         assertEq(protocolFee, uint32(0));
+    }
+
+    /**
+     * @dev Assert the EVM body embedded in `extcodehash(pool)` matches live 1 ETH.
+     *      `extcodehash` = keccak256(runtime); runtime = EVM body || CBOR metadata || len.
+     *      We compare the stripped EVM body bytes (not full codehash).
+     */
+    function _assertExtcodeEvmBodyMatchesLive1Eth(address pool) internal view {
+        bytes memory poolBody = _evmBodyOfExtcode(pool);
+        // Stripping: compare EVM body only — full extcodehash differs by slight solc
+        // metadata inconsistencies (CBOR trailer); the executable bytecode must match.
+        assertEq(poolBody, _live1EthEvmBody, "extcode EVM body != live 1 ETH");
+        // Sanity: full hashes differ only because of the metadata trailer we stripped.
+        assertTrue(pool.codehash != _LIVE_1_ETH.codehash, "expected full extcodehash to differ (metadata)");
+        assertEq(
+            keccak256(abi.encodePacked(poolBody, _metadataTrailer(pool.code))),
+            pool.codehash,
+            "pool extcodehash != keccak(body||metadata)"
+        );
+    }
+
+    /// @dev EVM body of `extcodehash` input: runtime with solc CBOR metadata trailer removed.
+    function _evmBodyOfExtcode(address account) internal view returns (bytes memory) {
+        return _stripMetadata(account.code);
+    }
+
+    /// @dev Drop solc CBOR metadata trailer (last 2 bytes = big-endian metadata length).
+    function _stripMetadata(bytes memory code) internal pure returns (bytes memory) {
+        (uint256 keep,) = _splitRuntime(code);
+        bytes memory out = new bytes(keep);
+        for (uint256 i = 0; i < keep; i++) {
+            out[i] = code[i];
+        }
+        return out;
+    }
+
+    function _metadataTrailer(bytes memory code) internal pure returns (bytes memory) {
+        (uint256 keep, uint256 metaLen) = _splitRuntime(code);
+        bytes memory out = new bytes(metaLen + 2);
+        for (uint256 i = 0; i < out.length; i++) {
+            out[i] = code[keep + i];
+        }
+        return out;
+    }
+
+    function _splitRuntime(bytes memory code) internal pure returns (uint256 keep, uint256 metaLen) {
+        require(code.length >= 2, "code too short");
+        metaLen = (uint256(uint8(code[code.length - 2])) << 8) + uint256(uint8(code[code.length - 1]));
+        require(code.length >= metaLen + 2, "metadata length");
+        keep = code.length - metaLen - 2;
     }
 
     function _findNewPool(address[] memory all, uint256 startIndex, uint256 denomination)
