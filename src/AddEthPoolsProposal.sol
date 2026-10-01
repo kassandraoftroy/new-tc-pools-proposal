@@ -36,7 +36,7 @@ contract AddEthPoolsProposal {
             token: IERC20Minimal(address(0)),
             state: IInstanceRegistry.InstanceState.ENABLED,
             uniswapPoolSwappingFee: 0,
-            protocolFeePercentage: 0
+            protocolFeePercentage: denomination > 1 ether ? 30 : 0
         });
 
         IInstanceRegistry(INSTANCE_REGISTRY)

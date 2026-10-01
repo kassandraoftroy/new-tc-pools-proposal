@@ -197,7 +197,7 @@ contract AddEthPoolsProposalTest is Test {
         assertEq(token, address(0));
         assertTrue(state == IInstanceRegistry.InstanceState.ENABLED);
         assertEq(uniswapFee, uint24(0));
-        assertEq(protocolFee, uint32(0));
+        assertEq(protocolFee, denomination > 1 ether ? uint32(30) : uint32(0));
     }
 
     /**

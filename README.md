@@ -11,7 +11,7 @@ Foundry repo that implements the on-chain execution for [adding 0.01, 0.03, 0.3,
 
 Denominations: `0.01 — 0.03 — 0.1 — 0.3 — 1 — 3 — 10 — 30 — 100` ETH (new sizes: 0.01, 0.03, 0.3, 3, 30).
 
-Protocol fee / anonymity mining are left unchanged (`protocolFeePercentage = 0`).
+Protocol fee is `30` BPS for pools `> 1 ETH` (3 and 30 ETH); smaller new pools stay at `0`.
 
 ## Compiler (bytecode match)
 
