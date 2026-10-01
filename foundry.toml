@@ -1,0 +1,25 @@
+# Defaults for all profiles.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = ["lib"]
+cache = true
+cache_path = "cache"
+force = false
+# Per-file pragma selects solc (0.7.6 for proposal/vendor, 0.8.x for tests).
+evm_version = "paris"
+optimizer = true
+optimizer_runs = 999_999
+via_ir = false
+verbosity = 3
+isolate = true
+lint = { lint_on_build = false }
+
+# Default overrides for the CI runs.
+[profile.ci]
+force = true
+verbosity = 4
+
+[rpc_endpoints]
+mainnet = "${ETH_RPC_URL}"
